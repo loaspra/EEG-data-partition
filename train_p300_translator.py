@@ -8,8 +8,11 @@ import argparse
 import random
 import matplotlib.pyplot as plt
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import CSVLogger, ModelCheckpoint, ReduceLROnPlateau, EarlyStopping
+from tensorflow.keras.layers import Dense, Input
+from tensorflow.keras.models import Model
 from min2net.model import MIN2Net
-from min2net.utils import write_log
+from min2net.utils import write_log, TimeHistory
 from min2net.loss import mean_squared_error, triplet_loss
 
 """
@@ -30,6 +33,175 @@ SAMPLE_DURATION = 64  # Samples in stimulus window
 INTENSIFIED_N_TIMES = 20  # Each item intensified 20 times (10 row + 10 column)
 MATRIX_DIMENSIONS = 6  # 6x6 matrix
 N_CHANNELS = 8  # Number of EEG channels (Fz, Cz, Pz, Oz, P3, P4, PO7, PO8)
+
+class TranslatorMIN2Net(MIN2Net):
+    """Extension of MIN2Net for P300 signal translation tasks.
+    
+    This class adds the capability to train the MIN2Net model for translation tasks,
+    where the input from one subject is translated to match a template from another subject.
+    """
+    
+    def __init__(self, *args, **kwargs):
+        super(TranslatorMIN2Net, self).__init__(*args, **kwargs)
+        
+    def build_translator(self):
+        """Build a modified MIN2Net model for translation tasks.
+        
+        This model uses only the autoencoder and triplet loss components,
+        removing the classifier component.
+        
+        Returns:
+            Model: Keras model for translation tasks
+        """
+        # Build the standard encoder
+        encoder_input = Input(self.input_shape)
+        encoder = self.build().get_layer('encoder')
+        
+        # Build the standard decoder
+        decoder = self.build().get_layer('decoder')
+        
+        # Connect them for translation (without classifier)
+        latent = encoder(encoder_input)
+        translation_output = decoder(latent)
+        
+        # Return the translation model
+        return Model(inputs=encoder_input, outputs=[translation_output, latent], name='TranslatorMIN2Net')
+    
+    def fit_translator(self, X_train, y_train, labels):
+        """Train the translator model using source and target signal pairs.
+        
+        Args:
+            X_train (numpy.ndarray): Input signals to translate
+            y_train (numpy.ndarray): Target signals (templates to match)
+            labels (numpy.ndarray): Class labels for triplet loss computation
+        """
+        if X_train.ndim != 4:
+            raise Exception('ValueError: `X_train` is incompatible: expected ndim=4, found ndim='+str(X_train.ndim))
+        
+        # Set up callbacks
+        csv_logger = CSVLogger(self.csv_dir)
+        time_callback = TimeHistory(self.time_log)
+        
+        checkpointer = ModelCheckpoint(
+            monitor=self.monitor, 
+            filepath=self.weights_dir,
+            verbose=self.verbose, 
+            save_best_only=self.save_best_only,
+            save_weight_only=self.save_weight_only
+        )
+        
+        reduce_lr = ReduceLROnPlateau(
+            monitor=self.monitor, 
+            patience=self.patience,
+            factor=self.factor, 
+            mode=self.mode, 
+            verbose=self.verbose,
+            min_lr=self.min_lr
+        )
+        
+        es = EarlyStopping(
+            monitor=self.monitor, 
+            mode=self.mode, 
+            verbose=self.verbose,
+            patience=self.es_patience
+        )
+        
+        # Create a custom model for translation
+        model = self.build_translator()
+        model.summary()
+        
+        # Custom loss weights: use only first two losses (decoder and triplet)
+        adjusted_loss_weights = self.loss_weights[:2]
+        adjusted_loss = self.loss[:2]
+        
+        # Compile the model
+        model.compile(
+            optimizer=self.optimizer, 
+            loss=adjusted_loss, 
+            metrics=self.metrics,
+            loss_weights=adjusted_loss_weights
+        )
+        
+        # Prepare the triplet data for the model
+        # Split data into anchors, positives, and negatives for triplet loss
+        n_samples = X_train.shape[0]
+        anchors = []
+        positives = []
+        negatives = []
+        
+        # Get indices for P300 and non-P300 samples
+        p300_indices = np.where(labels == 1)[0]
+        non_p300_indices = np.where(labels == 0)[0]
+        
+        # For each sample, find appropriate triplets
+        for i in range(n_samples):
+            current_label = labels[i]
+            
+            # If current sample is P300
+            if current_label == 1:
+                # Anchor is current P300 sample
+                anchors.append(X_train[i])
+                
+                # Positive is another random P300 sample
+                pos_idx = np.random.choice([j for j in p300_indices if j != i])
+                positives.append(X_train[pos_idx])
+                
+                # Negative is a random non-P300 sample
+                neg_idx = np.random.choice(non_p300_indices)
+                negatives.append(X_train[neg_idx])
+            else:
+                # Anchor is current non-P300 sample
+                anchors.append(X_train[i])
+                
+                # Positive is another random non-P300 sample
+                pos_idx = np.random.choice([j for j in non_p300_indices if j != i])
+                positives.append(X_train[pos_idx])
+                
+                # Negative is a random P300 sample
+                neg_idx = np.random.choice(p300_indices)
+                negatives.append(X_train[neg_idx])
+        
+        # Convert lists to numpy arrays
+        anchors = np.array(anchors)
+        positives = np.array(positives)
+        negatives = np.array(negatives)
+        
+        # Train the model with triplet inputs and translation targets
+        model.fit(
+            x=X_train, 
+            y=[y_train, anchors],  # Translation target and triplet anchors
+            batch_size=self.batch_size, 
+            shuffle=self.shuffle,
+            epochs=self.epochs, 
+            callbacks=[checkpointer, csv_logger, reduce_lr, es, time_callback],
+            verbose=1
+        )
+        
+        # Save the model weights
+        model.save_weights(self.weights_dir)
+        
+        return model
+    
+    def predict_translation(self, X_test):
+        """Predict translations for new signals.
+        
+        Args:
+            X_test (numpy.ndarray): Input signals to translate
+            
+        Returns:
+            numpy.ndarray: Translated signals
+        """
+        if X_test.ndim != 4:
+            raise Exception('ValueError: `X_test` is incompatible: expected ndim=4, found ndim='+str(X_test.ndim))
+        
+        # Load the translator model
+        model = self.build_translator()
+        model.load_weights(self.weights_dir)
+        
+        # Predict translations
+        translations, _ = model.predict(X_test)
+        
+        return translations
 
 def load_matlab_file(file_path):
     """Load a MATLAB .mat file and return its contents."""
@@ -250,7 +422,7 @@ def visualize_samples(target_samples, subject_samples, subject_id, save_path=Non
         plt.show()
 
 def train_translator_model(X_train, y_train, labels, args):
-    """Train the translator model using MIN2Net architecture without the classifier.
+    """Train the translator model using TranslatorMIN2Net.
     
     Args:
         X_train (numpy.ndarray): Input signals from subjects 2-8
@@ -259,34 +431,34 @@ def train_translator_model(X_train, y_train, labels, args):
         args (argparse.Namespace): Command-line arguments
         
     Returns:
-        MIN2Net: Trained model
+        TranslatorMIN2Net: Trained model
     """
     # Determine input shape - now using the 3D shape (D, T, C)
     input_shape = X_train.shape[1:]  # This should be (1, T, C)
     print(f"Model input shape: {input_shape}")
     
-    # Create model
-    model = MIN2Net(input_shape=input_shape,
-                    class_balancing=False,  # We've already balanced our data
-                    num_class=2,  # Binary: P300 vs. non-P300
-                    # Use only the autoencoder and triplet losses, not the classifier
-                    loss=[mean_squared_error, triplet_loss(margin=args.margin)],
-                    loss_weights=args.loss_weights[:2],  # Only use the first two weights
-                    epochs=args.epochs,
-                    batch_size=args.batch_size,
-                    optimizer=Adam(beta_1=0.9, beta_2=0.999, epsilon=1e-08),
-                    lr=args.learning_rate,
-                    min_lr=args.min_lr,
-                    factor=args.factor,
-                    patience=args.patience,
-                    es_patience=args.es_patience,
-                    latent_dim=args.latent_dim,
-                    log_path=args.log_path,
-                    model_name="P300_translator")
+    # Create translator model
+    model = TranslatorMIN2Net(
+        input_shape=input_shape,
+        class_balancing=False,  # We've already balanced our data
+        num_class=2,  # Binary: P300 vs. non-P300
+        # Use only the autoencoder and triplet losses, not the classifier
+        loss=[mean_squared_error, triplet_loss(margin=args.margin)],
+        loss_weights=args.loss_weights[:2],  # Only use the first two weights
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        optimizer=Adam(beta_1=0.9, beta_2=0.999, epsilon=1e-08),
+        lr=args.learning_rate,
+        min_lr=args.min_lr,
+        factor=args.factor,
+        patience=args.patience,
+        es_patience=args.es_patience,
+        latent_dim=args.latent_dim,
+        log_path=args.log_path,
+        model_name="P300_translator"
+    )
     
-    # Train model
-    # For MIN2Net, we need to make sure it handles the reshaped data correctly
-    # The fit_translator method would need to be implemented in the MIN2Net class
+    # Train the translator model
     print("Starting model training with data shape:", X_train.shape)
     model.fit_translator(X_train, y_train, labels)
     
