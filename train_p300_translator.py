@@ -142,13 +142,14 @@ def prepare_training_data(subjects_data, target_samples):
     sample_length = target_non_p300.shape[0]
     n_channels = target_non_p300.shape[1]
     
-    # Initialize arrays for input and output
-    X_non_p300 = np.zeros((total_non_p300_samples, sample_length, n_channels))
-    X_p300 = np.zeros((total_p300_samples, sample_length, n_channels))
+    # Initialize arrays for input and output - adding D=1 dimension for MIN2Net
+    X_non_p300 = np.zeros((total_non_p300_samples, 1, sample_length, n_channels))
+    X_p300 = np.zeros((total_p300_samples, 1, sample_length, n_channels))
     
     # Create corresponding target arrays by repeating the target samples
-    y_non_p300 = np.tile(target_non_p300[np.newaxis, :, :], (total_non_p300_samples, 1, 1))
-    y_p300 = np.tile(target_p300[np.newaxis, :, :], (total_p300_samples, 1, 1))
+    # Also add the D=1 dimension for targets
+    y_non_p300 = np.tile(target_non_p300[np.newaxis, np.newaxis, :, :], (total_non_p300_samples, 1, 1, 1))
+    y_p300 = np.tile(target_p300[np.newaxis, np.newaxis, :, :], (total_p300_samples, 1, 1, 1))
     
     # Fill the input arrays with data from subjects 2-8
     non_p300_idx = 0
@@ -160,12 +161,12 @@ def prepare_training_data(subjects_data, target_samples):
         
         # Add non-P300 samples
         for i in range(non_p300_data.shape[1]):
-            X_non_p300[non_p300_idx] = non_p300_data[:, i, :]
+            X_non_p300[non_p300_idx, 0] = non_p300_data[:, i, :]
             non_p300_idx += 1
         
         # Add P300 samples
         for i in range(p300_data.shape[1]):
-            X_p300[p300_idx] = p300_data[:, i, :]
+            X_p300[p300_idx, 0] = p300_data[:, i, :]
             p300_idx += 1
     
     # Combine non-P300 and P300 data
@@ -260,8 +261,9 @@ def train_translator_model(X_train, y_train, labels, args):
     Returns:
         MIN2Net: Trained model
     """
-    # Determine input shape
-    input_shape = X_train.shape[1:]
+    # Determine input shape - now using the 3D shape (D, T, C)
+    input_shape = X_train.shape[1:]  # This should be (1, T, C)
+    print(f"Model input shape: {input_shape}")
     
     # Create model
     model = MIN2Net(input_shape=input_shape,
@@ -282,12 +284,10 @@ def train_translator_model(X_train, y_train, labels, args):
                     log_path=args.log_path,
                     model_name="P300_translator")
     
-    # Modify model to remove the classifier (we only care about translation)
-    # This is done by setting the classifier loss weight to 0 in the MIN2Net constructor
-    
     # Train model
-    # Since we're not using the classifier, y_train contains the target signals, not class labels
-    # We'll use X_train as input and y_train as the reconstruction target
+    # For MIN2Net, we need to make sure it handles the reshaped data correctly
+    # The fit_translator method would need to be implemented in the MIN2Net class
+    print("Starting model training with data shape:", X_train.shape)
     model.fit_translator(X_train, y_train, labels)
     
     return model
