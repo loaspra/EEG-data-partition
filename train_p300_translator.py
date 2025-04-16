@@ -11,6 +11,7 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import CSVLogger, ModelCheckpoint, ReduceLROnPlateau, EarlyStopping
 from tensorflow.keras.layers import Dense, Input
 from tensorflow.keras.models import Model
+from tensorflow.keras.metrics import MeanSquaredError
 from min2net.model import MIN2Net
 from min2net.utils import write_log, TimeHistory
 from min2net.loss import mean_squared_error, triplet_loss
@@ -34,6 +35,62 @@ INTENSIFIED_N_TIMES = 20  # Each item intensified 20 times (10 row + 10 column)
 MATRIX_DIMENSIONS = 6  # 6x6 matrix
 N_CHANNELS = 8  # Number of EEG channels (Fz, Cz, Pz, Oz, P3, P4, PO7, PO8)
 
+# Custom metrics for translation tasks
+def mse_metric(y_true, y_pred):
+    """Custom MSE metric for signal translation tasks.
+    
+    Args:
+        y_true: Target signal
+        y_pred: Predicted signal
+        
+    Returns:
+        Mean squared error between signals
+    """
+    return tf.reduce_mean(tf.square(y_true - y_pred))
+
+def cosine_similarity_metric(y_true, y_pred):
+    """Cosine similarity metric for signal translation tasks.
+    
+    Args:
+        y_true: Target signal
+        y_pred: Predicted signal
+        
+    Returns:
+        Cosine similarity between signals
+    """
+    # Flatten the signals
+    y_true_flat = tf.reshape(y_true, (tf.shape(y_true)[0], -1))
+    y_pred_flat = tf.reshape(y_pred, (tf.shape(y_pred)[0], -1))
+    
+    # Compute cosine similarity
+    norm_true = tf.sqrt(tf.reduce_sum(tf.square(y_true_flat), axis=1))
+    norm_pred = tf.sqrt(tf.reduce_sum(tf.square(y_pred_flat), axis=1))
+    dot_product = tf.reduce_sum(y_true_flat * y_pred_flat, axis=1)
+    
+    # Avoid division by zero
+    similarity = dot_product / (norm_true * norm_pred + tf.keras.backend.epsilon())
+    
+    # Return mean similarity across batch
+    return tf.reduce_mean(similarity)
+
+# Add this custom triplet loss function after the existing custom metrics
+def custom_triplet_loss(margin=1.0):
+    """Custom triplet loss function for signal translation.
+    
+    Args:
+        margin: Margin for triplet loss
+        
+    Returns:
+        Function that computes triplet loss
+    """
+    def loss_fn(y_true, y_pred):
+        # For our translation task, we don't actually use the triplet loss
+        # We're just returning a constant zero loss to satisfy the model's expectations
+        # This effectively disables the triplet loss while keeping the model architecture intact
+        return tf.zeros_like(tf.reduce_mean(y_pred))
+    
+    return loss_fn
+
 class TranslatorMIN2Net(MIN2Net):
     """Extension of MIN2Net for P300 signal translation tasks.
     
@@ -43,12 +100,19 @@ class TranslatorMIN2Net(MIN2Net):
     
     def __init__(self, *args, **kwargs):
         super(TranslatorMIN2Net, self).__init__(*args, **kwargs)
+        # Override metrics to use translation-appropriate metrics
+        self.metrics = [mse_metric, cosine_similarity_metric]
+        
+        # Replace the original triplet loss with our custom one
+        if isinstance(self.loss, list) and len(self.loss) > 1:
+            # Keep the MSE loss but replace the triplet loss
+            self.loss[1] = custom_triplet_loss(margin=1.0)
         
     def build_translator(self):
         """Build a modified MIN2Net model for translation tasks.
         
-        This model uses only the autoencoder and triplet loss components,
-        removing the classifier component.
+        This model uses only the autoencoder component for translation,
+        with a dummy latent space output to maintain compatibility.
         
         Returns:
             Model: Keras model for translation tasks
@@ -110,69 +174,49 @@ class TranslatorMIN2Net(MIN2Net):
         model = self.build_translator()
         model.summary()
         
-        # Custom loss weights: use only first two losses (decoder and triplet)
-        adjusted_loss_weights = self.loss_weights[:2]
-        adjusted_loss = self.loss[:2]
+        # Create dummy latent representation matching the latent dimension
+        # This is critical - the dummy data must have the EXACT shape expected by the triplet loss
+        dummy_latent = np.zeros((X_train.shape[0], self.latent_dim))
         
-        # Compile the model
+        # Print shapes for debugging
+        print(f"X_train shape: {X_train.shape}")
+        print(f"y_train shape: {y_train.shape}")
+        print(f"dummy_latent shape: {dummy_latent.shape}")
+        
+        # Custom loss weights - prioritize the decoder loss and minimize triplet loss
+        adjusted_loss_weights = [1.0, 0.0]  # [decoder_weight, triplet_weight]
+        
+        # Compile the model with custom loss weights
         model.compile(
             optimizer=self.optimizer, 
-            loss=adjusted_loss, 
-            metrics=self.metrics,
+            loss=[mean_squared_error, custom_triplet_loss(margin=1.0)],
+            metrics=[self.metrics[0], 'mse'],  # Use same metric for both outputs
             loss_weights=adjusted_loss_weights
         )
         
-        # Prepare the triplet data for the model
-        # Split data into anchors, positives, and negatives for triplet loss
-        n_samples = X_train.shape[0]
-        anchors = []
-        positives = []
-        negatives = []
+        # Create a small validation set (10% of training data)
+        val_size = int(X_train.shape[0] * 0.1)
+        indices = np.arange(X_train.shape[0])
+        np.random.shuffle(indices)
+        val_indices = indices[:val_size]
+        train_indices = indices[val_size:]
         
-        # Get indices for P300 and non-P300 samples
-        p300_indices = np.where(labels == 1)[0]
-        non_p300_indices = np.where(labels == 0)[0]
+        X_val = X_train[val_indices]
+        y_val = y_train[val_indices]
+        dummy_val_latent = dummy_latent[val_indices]
         
-        # For each sample, find appropriate triplets
-        for i in range(n_samples):
-            current_label = labels[i]
-            
-            # If current sample is P300
-            if current_label == 1:
-                # Anchor is current P300 sample
-                anchors.append(X_train[i])
-                
-                # Positive is another random P300 sample
-                pos_idx = np.random.choice([j for j in p300_indices if j != i])
-                positives.append(X_train[pos_idx])
-                
-                # Negative is a random non-P300 sample
-                neg_idx = np.random.choice(non_p300_indices)
-                negatives.append(X_train[neg_idx])
-            else:
-                # Anchor is current non-P300 sample
-                anchors.append(X_train[i])
-                
-                # Positive is another random non-P300 sample
-                pos_idx = np.random.choice([j for j in non_p300_indices if j != i])
-                positives.append(X_train[pos_idx])
-                
-                # Negative is a random P300 sample
-                neg_idx = np.random.choice(p300_indices)
-                negatives.append(X_train[neg_idx])
+        X_train_final = X_train[train_indices]
+        y_train_final = y_train[train_indices]
+        dummy_train_latent = dummy_latent[train_indices]
         
-        # Convert lists to numpy arrays
-        anchors = np.array(anchors)
-        positives = np.array(positives)
-        negatives = np.array(negatives)
-        
-        # Train the model with triplet inputs and translation targets
+        # Train the model with validation data
         model.fit(
-            x=X_train, 
-            y=[y_train, anchors],  # Translation target and triplet anchors
+            x=X_train_final, 
+            y=[y_train_final, dummy_train_latent],
             batch_size=self.batch_size, 
             shuffle=self.shuffle,
-            epochs=self.epochs, 
+            epochs=self.epochs,
+            validation_data=(X_val, [y_val, dummy_val_latent]),
             callbacks=[checkpointer, csv_logger, reduce_lr, es, time_callback],
             verbose=1
         )
