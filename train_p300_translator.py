@@ -142,6 +142,12 @@ class TranslatorMIN2Net(MIN2Net):
         if X_train.ndim != 4:
             raise Exception('ValueError: `X_train` is incompatible: expected ndim=4, found ndim='+str(X_train.ndim))
         
+        # Ensure the weight directory exists
+        weights_dir = os.path.dirname(self.weights_dir)
+        os.makedirs(weights_dir, exist_ok=True)
+        
+        print(f"Model weights will be saved to: {self.weights_dir}")
+        
         # Set up callbacks
         csv_logger = CSVLogger(self.csv_dir)
         time_callback = TimeHistory(self.time_log)
@@ -481,6 +487,10 @@ def train_translator_model(X_train, y_train, labels, args):
     input_shape = X_train.shape[1:]  # This should be (1, T, C)
     print(f"Model input shape: {input_shape}")
     
+    # Create model directory for weights
+    model_dir = os.path.join(args.log_path, "P300_translator")
+    os.makedirs(model_dir, exist_ok=True)
+    
     # Create translator model
     model = TranslatorMIN2Net(
         input_shape=input_shape,
@@ -504,7 +514,12 @@ def train_translator_model(X_train, y_train, labels, args):
     
     # Train the translator model
     print("Starting model training with data shape:", X_train.shape)
-    model.fit_translator(X_train, y_train, labels)
+    trained_model = model.fit_translator(X_train, y_train, labels)
+    
+    # Save the full model directly (in addition to the weights saved in fit_translator)
+    model_path = os.path.join(args.log_path, "P300_translator_full_model.h5")
+    trained_model.save(model_path)
+    print(f"Full model saved to {model_path}")
     
     return model
 
