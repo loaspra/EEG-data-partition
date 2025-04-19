@@ -1,0 +1,3 @@
+epoch,decoder_accuracy,decoder_loss,domain_classifier_accuracy,domain_classifier_loss,encoder_accuracy,encoder_loss,loss,val_decoder_accuracy,val_decoder_loss,val_domain_classifier_accuracy,val_domain_classifier_loss,val_encoder_accuracy,val_encoder_loss,val_loss
+0,0.12356209009885788,1.4534306526184082,0.4466666579246521,0.7624593377113342,0.03333333507180214,0.5953898429870605,1.2461391687393188,NA,NA,NA,NA,NA,NA,NA
+1,0.1344444453716278,1.1907169818878174,0.8733333349227905,0.38696935772895813,0.02666666731238365,0.5908557176589966,0.9495927691459656,NA,NA,NA,NA,NA,NA,NA
