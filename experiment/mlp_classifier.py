@@ -69,20 +69,28 @@ class MLPClassifier:
         
         return model
     
-    def train(self, X_train, y_train, epochs=100, batch_size=32, validation_split=0.2):
+    def train(self, X_train, y_train, batch_size=32, epochs=100, learning_rate=0.001, validation_split=0.2):
         """
         Train MLP model.
         
         Args:
             X_train (np.ndarray): Training features, shape (n_samples, n_features)
             y_train (np.ndarray): Training labels, shape (n_samples,)
-            epochs (int): Maximum number of epochs for training
             batch_size (int): Batch size for training
+            epochs (int): Maximum number of epochs for training
+            learning_rate (float): Learning rate for the optimizer
             validation_split (float): Fraction of training data to use for validation
             
         Returns:
             history: Training history
         """
+        # Update optimizer with specified learning rate
+        self.model.compile(
+            optimizer=Adam(learning_rate=learning_rate),
+            loss='binary_crossentropy',
+            metrics=['accuracy']
+        )
+        
         # Calculate class weights for balanced training
         class_weights = class_weight.compute_class_weight(
             'balanced', 
@@ -130,7 +138,7 @@ class MLPClassifier:
         
         return y_pred.flatten()
     
-    def evaluate(self, X_test, y_test, threshold=0.5, return_metrics=False):
+    def evaluate(self, X_test, y_test, threshold=0.5):
         """
         Evaluate model performance.
         
@@ -138,10 +146,9 @@ class MLPClassifier:
             X_test (np.ndarray): Test features, shape (n_samples, n_features)
             y_test (np.ndarray): Test labels, shape (n_samples,)
             threshold (float): Classification threshold for binary prediction
-            return_metrics (bool): Whether to return metrics or just print them
             
         Returns:
-            tuple or None: (accuracy, f1_score, confusion_matrix) if return_metrics is True
+            tuple: (y_pred, metrics_dict) containing predictions and evaluation metrics
         """
         # Make predictions
         y_prob = self.model.predict(X_test)
@@ -162,10 +169,17 @@ class MLPClassifier:
         print("Confusion Matrix:")
         print(cm)
         
-        if return_metrics:
-            return acc, f1, cm
-        else:
-            return None
+        # Create metrics dictionary
+        metrics = {
+            "accuracy": acc,
+            "precision": prec,
+            "recall": rec,
+            "f1": f1,
+            "confusion_matrix": cm,
+            "probabilities": y_prob.flatten()  # Include raw probabilities for threshold tuning
+        }
+        
+        return y_pred, metrics
 
 def compare_classifiers(model1, model2, X_test, y_test, model_names=['Model 1', 'Model 2']):
     """

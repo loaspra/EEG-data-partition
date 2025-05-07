@@ -8,6 +8,8 @@ import numpy as np
 import config
 from data_preprocessing import preprocess_subject_data, partition_data
 from feature_extraction import extract_features_all_subjects, extract_and_save_features, extract_features_from_dataset
+from scipy.stats import skew, kurtosis
+from scipy.signal import find_peaks
 
 def prepare_eeg_for_min2net(eeg_data):
     """
@@ -82,9 +84,76 @@ def load_features(subject_id, partition='train', extract_if_not_exists=True):
     data = np.load(features_path)
     return data['features'], data['labels']
 
+def extract_p300_time_window_features(eeg_data, sampling_rate=256):
+    """
+    Extract features specifically designed for P300 detection, focusing on time windows
+    where P300 components typically appear.
+    
+    Args:
+        eeg_data (numpy.ndarray): EEG data with shape (trials, channels, samples)
+        sampling_rate (int): Sampling rate in Hz
+        
+    Returns:
+        numpy.ndarray: P300-specific features
+    """
+    n_trials, n_channels, n_samples = eeg_data.shape
+    features_list = []
+    
+    # Define time windows relevant for P300 (pre, during, post)
+    # P300 typically appears between 250-500ms post-stimulus
+    p300_windows = [(0, 200), (200, 400), (400, 600)]  # ms
+    window_samples = [(int(w[0]*sampling_rate/1000), int(w[1]*sampling_rate/1000)) for w in p300_windows]
+    
+    for trial in range(n_trials):
+        trial_features = []
+        
+        # Extract features from each channel
+        for ch in range(n_channels):
+            # Basic features from the entire signal
+            signal = eeg_data[trial, ch, :]
+            
+            # Global features
+            trial_features.extend([
+                np.mean(signal),
+                np.std(signal),
+                np.max(signal),
+                np.min(signal),
+                skew(signal),
+                kurtosis(signal)
+            ])
+            
+            # Window-based features
+            for start, end in window_samples:
+                window_data = eeg_data[trial, ch, start:end]
+                trial_features.extend([
+                    np.mean(window_data),  # Mean amplitude
+                    np.std(window_data),   # Variability
+                    np.max(window_data),   # Peak amplitude
+                    np.argmax(window_data) + start,  # Peak latency
+                    np.sum(np.abs(np.diff(window_data)))  # Signal complexity
+                ])
+            
+            # Peak detection
+            peaks, _ = find_peaks(signal, height=0)
+            if len(peaks) > 0:
+                # Features based on the highest peak
+                max_peak_idx = peaks[np.argmax(signal[peaks])]
+                trial_features.extend([
+                    max_peak_idx,  # Position of maximum peak
+                    signal[max_peak_idx],  # Value of maximum peak
+                    len(peaks)     # Number of peaks
+                ])
+            else:
+                # Default values if no peaks found
+                trial_features.extend([0, 0, 0])
+        
+        features_list.append(trial_features)
+    
+    return np.array(features_list)
+
 def extract_features(eeg_data):
     """
-    Extract features from EEG data.
+    Extract features from EEG data using enhanced P300 features.
     
     Args:
         eeg_data (numpy.ndarray): EEG data with shape (trials, channels, samples)
@@ -92,8 +161,16 @@ def extract_features(eeg_data):
     Returns:
         numpy.ndarray: Extracted features
     """
-    # Use the feature extraction function from feature_extraction.py
-    return extract_features_from_dataset(eeg_data, config.SAMPLING_RATE)
+    # Extract standard features from feature_extraction.py
+    standard_features = extract_features_from_dataset(eeg_data, config.SAMPLING_RATE)
+    
+    # Extract enhanced P300-specific features
+    p300_features = extract_p300_time_window_features(eeg_data, config.SAMPLING_RATE)
+    
+    # Combine both feature sets
+    combined_features = np.hstack((standard_features, p300_features))
+    
+    return combined_features
 
 def load_original_features():
     """

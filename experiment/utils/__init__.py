@@ -16,13 +16,15 @@ from utils.model_utils import (
     train_min2net_translator,
     translate_source_subjects,
     extract_features_from_translated_data,
-    train_and_evaluate_classifiers
+    train_and_evaluate_classifiers,
+    find_optimal_threshold
 )
 
 from utils.visualization import (
     compare_original_vs_translated,
     plot_training_curves,
-    visualize_feature_importance
+    visualize_feature_importance,
+    visualize_latent_space
 )
 
 __all__ = [
@@ -39,9 +41,11 @@ __all__ = [
     'translate_source_subjects',
     'extract_features_from_translated_data',
     'train_and_evaluate_classifiers',
+    'find_optimal_threshold',
     
     # Visualization utilities
     'compare_original_vs_translated',
     'plot_training_curves',
-    'visualize_feature_importance'
+    'visualize_feature_importance',
+    'visualize_latent_space'
 ] 

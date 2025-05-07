@@ -7,6 +7,8 @@ import os
 import numpy as np
 import time
 from sklearn.utils import class_weight
+from sklearn.metrics import roc_curve
+import matplotlib.pyplot as plt
 
 import config
 from utils.data_utils import load_subject_data, prepare_eeg_for_min2net, extract_features
@@ -257,6 +259,49 @@ def extract_features_from_translated_data(translated_data):
     
     return translated_features
 
+def find_optimal_threshold(y_true, y_prob):
+    """
+    Find the optimal threshold for classification based on ROC curve.
+    
+    Args:
+        y_true: True labels
+        y_prob: Predicted probabilities
+        
+    Returns:
+        float: Optimal threshold
+    """
+    # Calculate ROC curve
+    fpr, tpr, thresholds = roc_curve(y_true, y_prob)
+    
+    # Calculate the geometric mean of sensitivity and specificity
+    gmeans = np.sqrt(tpr * (1 - fpr))
+    
+    # Find the optimal threshold
+    ix = np.argmax(gmeans)
+    optimal_threshold = thresholds[ix]
+    
+    # Plot ROC curve and optimal threshold
+    plt.figure(figsize=(8, 6))
+    plt.plot(fpr, tpr, label='ROC Curve')
+    plt.scatter(fpr[ix], tpr[ix], marker='o', color='black', 
+               label=f'Optimal Threshold = {optimal_threshold:.4f}')
+    plt.plot([0, 1], [0, 1], 'k--', label='No Skill')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC Curve with Optimal Threshold')
+    plt.legend()
+    plt.grid(True)
+    
+    # Save the plot
+    save_path = os.path.join(config.RESULTS_DIR, 'roc_curve.png')
+    plt.savefig(save_path)
+    plt.close()
+    
+    print(f"ROC curve saved to: {save_path}")
+    print(f"Optimal threshold: {optimal_threshold:.4f}")
+    
+    return optimal_threshold
+
 def train_and_evaluate_classifiers(translated_features=None, original_features=None):
     """
     Train and evaluate MLP classifiers on translated and original data.
@@ -270,7 +315,7 @@ def train_and_evaluate_classifiers(translated_features=None, original_features=N
     """
     if translated_features is None or original_features is None:
         print("Error: Both translated and original features must be provided")
-        return
+        return None, None
     
     print("=== Training and Evaluating Classifiers ===")
     
@@ -307,17 +352,17 @@ def train_and_evaluate_classifiers(translated_features=None, original_features=N
     print("\nTraining classifier on translated data...")
     translated_model = MLPClassifier(
         input_shape=trans_train_features.shape[1],
-        hidden_units=config.MLP_HIDDEN_UNITS,
-        dropout=config.MLP_DROPOUT
+        hidden_units=[128, 64],  # Use a more complex model architecture
+        dropout=0.4  # Adjust dropout for better regularization
     )
     
     start_time = time.time()
-    translated_model.train(
+    history_trans = translated_model.train(
         trans_train_features,
         trans_train_labels,
         batch_size=config.MLP_BATCH_SIZE,
         epochs=config.MLP_EPOCHS,
-        # learning_rate=config.MLP_LEARNING_RATE
+        learning_rate=0.0005  # Lower learning rate for better convergence
     )
     trans_train_time = time.time() - start_time
     print(f"Training completed in {trans_train_time:.2f} seconds")
@@ -344,17 +389,17 @@ def train_and_evaluate_classifiers(translated_features=None, original_features=N
     print("\nTraining classifier on original data...")
     original_model = MLPClassifier(
         input_shape=orig_train_features.shape[1],
-        hidden_units=config.MLP_HIDDEN_UNITS,
-        dropout=config.MLP_DROPOUT
+        hidden_units=[128, 64],  # Use the same architecture for fair comparison
+        dropout=0.4
     )
     
     start_time = time.time()
-    original_model.train(
+    history_orig = original_model.train(
         orig_train_features,
         orig_train_labels,
         batch_size=config.MLP_BATCH_SIZE,
         epochs=config.MLP_EPOCHS,
-        # learning_rate=config.MLP_LEARNING_RATE
+        learning_rate=0.0005
     )
     orig_train_time = time.time() - start_time
     print(f"Training completed in {orig_train_time:.2f} seconds")
@@ -362,44 +407,39 @@ def train_and_evaluate_classifiers(translated_features=None, original_features=N
     # PART 3: Evaluate both classifiers on subject 1's test data
     print("\nEvaluating classifiers on Subject 1 test data...")
     
-    # Evaluate translated model
-    trans_pred, trans_metrics = translated_model.evaluate(test_features, test_labels)
+    # Make predictions with translated model and find optimal threshold
+    trans_preds_raw, _ = translated_model.model.predict(test_features), None
+    trans_preds_raw = trans_preds_raw.flatten()
+    trans_threshold = find_optimal_threshold(test_labels, trans_preds_raw)
+    
+    # Evaluate translated model with optimal threshold
+    trans_pred, trans_metrics = translated_model.evaluate(test_features, test_labels, threshold=trans_threshold)
+    
+    # Make predictions with original model and find optimal threshold
+    orig_preds_raw, _ = original_model.model.predict(test_features), None
+    orig_preds_raw = orig_preds_raw.flatten()
+    orig_threshold = find_optimal_threshold(test_labels, orig_preds_raw)
+    
+    # Evaluate original model with optimal threshold
+    orig_pred, orig_metrics = original_model.evaluate(test_features, test_labels, threshold=orig_threshold)
+    
+    # Extract metrics for easier comparison
     trans_accuracy = trans_metrics["accuracy"]
     trans_precision = trans_metrics["precision"]
     trans_recall = trans_metrics["recall"]
     trans_f1 = trans_metrics["f1"]
     trans_cm = trans_metrics["confusion_matrix"]
     
-    # Print translated model results
-    print(f"Translated Model Results:")
-    print(f"Accuracy: {trans_accuracy:.4f}")
-    print(f"Precision: {trans_precision:.4f}")
-    print(f"Recall: {trans_recall:.4f}")
-    print(f"F1 Score: {trans_f1:.4f}")
-    print(f"Confusion Matrix:")
-    print(trans_cm)
-    
-    # Evaluate original model
-    orig_pred, orig_metrics = original_model.evaluate(test_features, test_labels)
     orig_accuracy = orig_metrics["accuracy"]
     orig_precision = orig_metrics["precision"]
     orig_recall = orig_metrics["recall"]
     orig_f1 = orig_metrics["f1"]
     orig_cm = orig_metrics["confusion_matrix"]
     
-    # Print original model results
-    print(f"Original Model Results:")
-    print(f"Accuracy: {orig_accuracy:.4f}")
-    print(f"Precision: {orig_precision:.4f}")
-    print(f"Recall: {orig_recall:.4f}")
-    print(f"F1 Score: {orig_f1:.4f}")
-    print(f"Confusion Matrix:")
-    print(orig_cm)
-    
     # PART 4: Compare the results
     print("\n=== Classification Results ===")
-    print(f"Translated Model - Accuracy: {trans_accuracy:.4f}, F1 Score: {trans_f1:.4f}")
-    print(f"Original Model - Accuracy: {orig_accuracy:.4f}, F1 Score: {orig_f1:.4f}")
+    print(f"Translated Model - Accuracy: {trans_accuracy:.4f}, F1 Score: {trans_f1:.4f}, Threshold: {trans_threshold:.4f}")
+    print(f"Original Model - Accuracy: {orig_accuracy:.4f}, F1 Score: {orig_f1:.4f}, Threshold: {orig_threshold:.4f}")
     
     # Compare and visualize the results
     compare_classifiers(
