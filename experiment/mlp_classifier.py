@@ -17,214 +17,120 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import time
 import config
+from sklearn.utils import class_weight
 
 class MLPClassifier:
     """
     Multi-Layer Perceptron classifier for P300 detection.
     """
-    def __init__(self,
-                hidden_layers=[128, 64],
-                dropout_rate=0.5,
-                batch_size=32,
-                epochs=50,
-                learning_rate=0.0005,
-                min_lr=0.00001,
-                factor=0.5,
-                patience=10,
-                es_patience=20,
-                verbose=1,
-                log_path='models',
-                model_name='P300_MLP',
-                random_seed=42,
-                **kwargs):
+    def __init__(self, input_shape, hidden_units=64, dropout=0.5):
         """
         Initialize MLP classifier.
         
         Args:
-            hidden_layers (list): List of neurons in hidden layers
-            dropout_rate (float): Dropout rate for regularization
-            batch_size (int): Batch size for training
-            epochs (int): Maximum number of epochs for training
-            learning_rate (float): Initial learning rate
-            min_lr (float): Minimum learning rate for reduction
-            factor (float): Factor for learning rate reduction
-            patience (int): Patience for learning rate reduction
-            es_patience (int): Patience for early stopping
-            verbose (int): Verbosity level
-            log_path (str): Path for saving logs and model
-            model_name (str): Name of the model
-            random_seed (int): Random seed for reproducibility
-            **kwargs: Additional parameters
+            input_shape (int): Dimension of input features
+            hidden_units (int or list): Number of neurons in hidden layer(s)
+            dropout (float): Dropout rate for regularization
         """
-        self.hidden_layers = hidden_layers
-        self.dropout_rate = dropout_rate
-        self.batch_size = batch_size
-        self.epochs = epochs
-        self.learning_rate = learning_rate
-        self.min_lr = min_lr
-        self.factor = factor
-        self.patience = patience
-        self.es_patience = es_patience
-        self.verbose = verbose
-        self.log_path = log_path
-        self.model_name = model_name
-        self.random_seed = random_seed
+        self.input_shape = input_shape
+        self.hidden_units = hidden_units if isinstance(hidden_units, list) else [hidden_units]
+        self.dropout = dropout
+        self.model = self._build_model()
         
-        # Set random seed for reproducibility
-        np.random.seed(self.random_seed)
-        tf.random.set_seed(self.random_seed)
-        
-        # Create log directory if it doesn't exist
-        if not os.path.exists(self.log_path):
-            os.makedirs(self.log_path)
-        
-        # Paths for saving model and logs
-        self.model_path = os.path.join(log_path, f'{model_name}.h5')
-        self.csv_path = os.path.join(log_path, f'{model_name}_log.log')
-        
-        # Update attributes with kwargs
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-    
-    def build(self, input_dim):
+    def _build_model(self):
         """
         Build MLP model.
         
-        Args:
-            input_dim (int): Dimension of input features
-            
         Returns:
             Sequential: Compiled MLP model
         """
-        model = Sequential(name=self.model_name)
+        model = Sequential()
         
         # Add input layer
-        model.add(Dense(self.hidden_layers[0], input_dim=input_dim, activation='relu'))
+        model.add(Dense(self.hidden_units[0], input_dim=self.input_shape, activation='relu'))
         model.add(BatchNormalization())
-        model.add(Dropout(self.dropout_rate))
+        model.add(Dropout(self.dropout))
         
         # Add hidden layers
-        for units in self.hidden_layers[1:]:
+        for units in self.hidden_units[1:]:
             model.add(Dense(units, activation='relu'))
             model.add(BatchNormalization())
-            model.add(Dropout(self.dropout_rate))
+            model.add(Dropout(self.dropout))
         
         # Add output layer (binary classification)
         model.add(Dense(1, activation='sigmoid'))
         
         # Compile model
         model.compile(
-            optimizer=Adam(learning_rate=self.learning_rate),
+            optimizer=Adam(learning_rate=0.001),
             loss='binary_crossentropy',
             metrics=['accuracy']
         )
         
         return model
     
-    def fit(self, X_train, y_train, X_val=None, y_val=None, class_weights=None):
+    def train(self, X_train, y_train, epochs=100, batch_size=32, validation_split=0.2):
         """
         Train MLP model.
         
         Args:
             X_train (np.ndarray): Training features, shape (n_samples, n_features)
             y_train (np.ndarray): Training labels, shape (n_samples,)
-            X_val (np.ndarray): Validation features, shape (n_samples, n_features)
-            y_val (np.ndarray): Validation labels, shape (n_samples,)
-            class_weights (dict): Class weights for imbalanced data
+            epochs (int): Maximum number of epochs for training
+            batch_size (int): Batch size for training
+            validation_split (float): Fraction of training data to use for validation
             
         Returns:
-            Sequential: Trained MLP model
+            history: Training history
         """
-        # Ensure binary labels are in correct format (0 or 1)
-        y_train = y_train.astype(int)
-        if y_val is not None:
-            y_val = y_val.astype(int)
-        
-        # Build model
-        input_dim = X_train.shape[1]
-        model = self.build(input_dim)
-        
-        if self.verbose > 0:
-            model.summary()
-        
-        # Prepare callbacks
-        callbacks = []
-        
-        # Model checkpoint callback
-        checkpoint = ModelCheckpoint(
-            filepath=self.model_path,
-            monitor='val_loss' if X_val is not None else 'loss',
-            save_best_only=True,
-            mode='min',
-            verbose=self.verbose
+        # Calculate class weights for balanced training
+        class_weights = class_weight.compute_class_weight(
+            'balanced', 
+            classes=np.unique(y_train), 
+            y=y_train
         )
-        callbacks.append(checkpoint)
+        class_weight_dict = {i: class_weights[i] for i in range(len(class_weights))}
         
-        # Early stopping callback
-        early_stopping = EarlyStopping(
-            monitor='val_loss' if X_val is not None else 'loss',
-            patience=self.es_patience,
-            mode='min',
-            restore_best_weights=True,
-            verbose=self.verbose
-        )
-        callbacks.append(early_stopping)
-        
-        # Learning rate reduction callback
-        reduce_lr = ReduceLROnPlateau(
-            monitor='val_loss' if X_val is not None else 'loss',
-            factor=self.factor,
-            patience=self.patience,
-            min_lr=self.min_lr,
-            mode='min',
-            verbose=self.verbose
-        )
-        callbacks.append(reduce_lr)
-        
-        # CSV logger callback
-        csv_logger = CSVLogger(self.csv_path)
-        callbacks.append(csv_logger)
+        # Callbacks for training
+        callbacks = [
+            EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True),
+            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=0.00001)
+        ]
         
         # Train model
         start_time = time.time()
-        history = model.fit(
+        history = self.model.fit(
             X_train, y_train,
-            batch_size=self.batch_size,
-            epochs=self.epochs,
-            validation_data=(X_val, y_val) if X_val is not None and y_val is not None else None,
+            batch_size=batch_size,
+            epochs=epochs,
+            validation_split=validation_split,
             callbacks=callbacks,
-            class_weight=class_weights,
-            verbose=self.verbose
+            class_weight=class_weight_dict,
+            verbose=1
         )
         training_time = time.time() - start_time
         
         print(f"Training completed in {training_time:.2f} seconds")
-        self.model = model
         
         return history
     
-    def predict(self, X_test, threshold=0.5):
+    def predict(self, X, threshold=0.5):
         """
         Make predictions with trained model.
         
         Args:
-            X_test (np.ndarray): Test features, shape (n_samples, n_features)
+            X (np.ndarray): Input features, shape (n_samples, n_features)
             threshold (float): Classification threshold for binary prediction
             
         Returns:
-            tuple: (y_pred, y_prob) where y_pred is binary predictions and y_prob is probabilities
+            np.ndarray: Binary predictions
         """
-        # Load model if not already loaded
-        if not hasattr(self, 'model'):
-            self.model = load_model(self.model_path)
-        
-        # Make predictions
-        y_prob = self.model.predict(X_test)
+        y_prob = self.model.predict(X)
         y_pred = (y_prob >= threshold).astype(int)
         
-        return y_pred.flatten(), y_prob.flatten()
+        return y_pred.flatten()
     
-    def evaluate(self, X_test, y_test, threshold=0.5, plot_confusion=True):
+    def evaluate(self, X_test, y_test, threshold=0.5, return_metrics=False):
         """
         Evaluate model performance.
         
@@ -232,106 +138,98 @@ class MLPClassifier:
             X_test (np.ndarray): Test features, shape (n_samples, n_features)
             y_test (np.ndarray): Test labels, shape (n_samples,)
             threshold (float): Classification threshold for binary prediction
-            plot_confusion (bool): Whether to plot confusion matrix
+            return_metrics (bool): Whether to return metrics or just print them
             
         Returns:
-            dict: Evaluation metrics
+            tuple or None: (accuracy, f1_score, confusion_matrix) if return_metrics is True
         """
-        # Ensure labels are binary and in correct format
-        y_test = y_test.astype(int)
-        
         # Make predictions
-        y_pred, y_prob = self.predict(X_test, threshold)
+        y_prob = self.model.predict(X_test)
+        y_pred = (y_prob >= threshold).astype(int).flatten()
         
         # Calculate metrics
-        accuracy = accuracy_score(y_test, y_pred)
-        precision = precision_score(y_test, y_pred, zero_division=0)
-        recall = recall_score(y_test, y_pred, zero_division=0)
+        acc = accuracy_score(y_test, y_pred)
+        prec = precision_score(y_test, y_pred, zero_division=0)
+        rec = recall_score(y_test, y_pred, zero_division=0)
         f1 = f1_score(y_test, y_pred, zero_division=0)
-        auc = roc_auc_score(y_test, y_prob)
+        cm = confusion_matrix(y_test, y_pred)
         
-        # Print classification report
-        print("Classification Report:")
-        print(classification_report(y_test, y_pred, zero_division=0))
+        # Print metrics
+        print(f"Accuracy: {acc:.4f}")
+        print(f"Precision: {prec:.4f}")
+        print(f"Recall: {rec:.4f}")
+        print(f"F1 Score: {f1:.4f}")
+        print("Confusion Matrix:")
+        print(cm)
         
-        # Plot confusion matrix
-        if plot_confusion:
-            cm = confusion_matrix(y_test, y_pred)
-            plt.figure(figsize=(8, 6))
-            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                        xticklabels=['Non-P300', 'P300'], 
-                        yticklabels=['Non-P300', 'P300'])
-            plt.xlabel('Predicted')
-            plt.ylabel('True')
-            plt.title(f'{self.model_name} Confusion Matrix')
-            plt.tight_layout()
-            
-            # Save the plot
-            cm_path = os.path.join(self.log_path, f'{self.model_name}_confusion_matrix.png')
-            plt.savefig(cm_path)
-            plt.close()
-            print(f"Confusion matrix saved to: {cm_path}")
-        
-        # Return metrics
-        metrics = {
-            'accuracy': accuracy,
-            'precision': precision,
-            'recall': recall,
-            'f1_score': f1,
-            'auc': auc
-        }
-        
-        return metrics
+        if return_metrics:
+            return acc, f1, cm
+        else:
+            return None
 
-def compare_classifiers(original_metrics, translated_metrics, save_path=None):
+def compare_classifiers(model1, model2, X_test, y_test, model_names=['Model 1', 'Model 2']):
     """
-    Compare performance of classifiers trained on original vs. translated data.
+    Compare two classifiers and visualize the results.
     
     Args:
-        original_metrics (dict): Metrics from classifier trained on original data
-        translated_metrics (dict): Metrics from classifier trained on translated data
-        save_path (str): Path to save the comparison plot
-        
-    Returns:
-        None
+        model1: First classifier model
+        model2: Second classifier model
+        X_test: Test features
+        y_test: Test labels
+        model_names: Names of the models to display
     """
-    # Create comparison bar chart
-    metrics = ['accuracy', 'precision', 'recall', 'f1_score', 'auc']
+    # Get predictions and confusion matrices
+    y_pred1 = model1.predict(X_test)
+    y_pred2 = model2.predict(X_test)
     
-    # Set up the figure
-    plt.figure(figsize=(12, 8))
+    cm1 = confusion_matrix(y_test, y_pred1)
+    cm2 = confusion_matrix(y_test, y_pred2)
     
-    # Bar width and positions
-    bar_width = 0.35
-    positions = np.arange(len(metrics))
+    # Calculate metrics
+    acc1 = accuracy_score(y_test, y_pred1)
+    acc2 = accuracy_score(y_test, y_pred2)
     
-    # Plot bars
-    plt.bar(positions - bar_width/2, [original_metrics[m] for m in metrics], bar_width, 
-            label='Original Data', color='cornflowerblue')
-    plt.bar(positions + bar_width/2, [translated_metrics[m] for m in metrics], bar_width, 
-            label='Translated Data', color='salmon')
+    f1_1 = f1_score(y_test, y_pred1, zero_division=0)
+    f1_2 = f1_score(y_test, y_pred2, zero_division=0)
     
-    # Add text labels
-    for i, metric in enumerate(metrics):
-        plt.text(i - bar_width/2, original_metrics[metric] + 0.01, 
-                 f"{original_metrics[metric]:.3f}", ha='center')
-        plt.text(i + bar_width/2, translated_metrics[metric] + 0.01, 
-                 f"{translated_metrics[metric]:.3f}", ha='center')
+    prec1 = precision_score(y_test, y_pred1, zero_division=0)
+    prec2 = precision_score(y_test, y_pred2, zero_division=0)
     
-    # Customize plot
-    plt.xlabel('Metrics')
-    plt.ylabel('Score')
-    plt.title('Performance Comparison: Original vs. Translated Data')
-    plt.xticks(positions, metrics)
-    plt.legend()
-    plt.ylim(0, 1.1)
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    rec1 = recall_score(y_test, y_pred1, zero_division=0)
+    rec2 = recall_score(y_test, y_pred2, zero_division=0)
     
-    # Save the plot if save_path is provided
-    if save_path:
-        plt.savefig(save_path)
-        print(f"Comparison plot saved to: {save_path}")
+    # Print comparison table
+    print("\nModel Comparison:")
+    print(f"{'Metric':<12} {model_names[0]:<15} {model_names[1]:<15} {'Difference':<15}")
+    print("-" * 60)
+    print(f"{'Accuracy':<12} {acc1:<15.4f} {acc2:<15.4f} {acc1-acc2:<15.4f}")
+    print(f"{'F1 Score':<12} {f1_1:<15.4f} {f1_2:<15.4f} {f1_1-f1_2:<15.4f}")
+    print(f"{'Precision':<12} {prec1:<15.4f} {prec2:<15.4f} {prec1-prec2:<15.4f}")
+    print(f"{'Recall':<12} {rec1:<15.4f} {rec2:<15.4f} {rec1-rec2:<15.4f}")
+    
+    # Plot confusion matrices
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    
+    sns.heatmap(cm1, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=['Non-P300', 'P300'], 
+                yticklabels=['Non-P300', 'P300'], 
+                ax=ax1)
+    ax1.set_xlabel('Predicted')
+    ax1.set_ylabel('True')
+    ax1.set_title(f'{model_names[0]} Confusion Matrix')
+    
+    sns.heatmap(cm2, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=['Non-P300', 'P300'], 
+                yticklabels=['Non-P300', 'P300'], 
+                ax=ax2)
+    ax2.set_xlabel('Predicted')
+    ax2.set_ylabel('True')
+    ax2.set_title(f'{model_names[1]} Confusion Matrix')
     
     plt.tight_layout()
-    plt.show()
+    
+    # Save the figure
+    save_path = os.path.join(config.RESULTS_DIR, 'classifier_comparison.png')
+    plt.savefig(save_path)
+    print(f"\nComparison visualization saved to: {save_path}")
     plt.close() 
