@@ -16,14 +16,14 @@ from sklearn.metrics import confusion_matrix, classification_report
 import matplotlib.pyplot as plt
 import seaborn as sns
 import time
-import config
+import config  # Import config to ensure global seed is set
 from sklearn.utils import class_weight
 
 class MLPClassifier:
     """
     Multi-Layer Perceptron classifier for P300 detection.
     """
-    def __init__(self, input_shape, hidden_units=64, dropout=0.5):
+    def __init__(self, input_shape, hidden_units=64, dropout=0.5, random_seed=None):
         """
         Initialize MLP classifier.
         
@@ -31,10 +31,16 @@ class MLPClassifier:
             input_shape (int): Dimension of input features
             hidden_units (int or list): Number of neurons in hidden layer(s)
             dropout (float): Dropout rate for regularization
+            random_seed (int): Random seed for reproducibility
         """
         self.input_shape = input_shape
         self.hidden_units = hidden_units if isinstance(hidden_units, list) else [hidden_units]
         self.dropout = dropout
+        self.random_seed = random_seed if random_seed is not None else config.RANDOM_SEED
+        
+        # Ensure reproducibility (global seed should already be set by config import)
+        print(f"MLP using random seed: {self.random_seed}")
+        
         self.model = self._build_model()
         
     def _build_model(self):
@@ -246,4 +252,4 @@ def compare_classifiers(model1, model2, X_test, y_test, model_names=['Model 1', 
     save_path = os.path.join(config.RESULTS_DIR, 'classifier_comparison.png')
     plt.savefig(save_path)
     print(f"\nComparison visualization saved to: {save_path}")
-    plt.close() 
+    plt.close()

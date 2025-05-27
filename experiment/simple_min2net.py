@@ -15,6 +15,7 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras import backend as K
 import time
 from sklearn.metrics import classification_report, f1_score
+import config  # Import config to ensure global seed is set
 
 class SimpleMin2Net:
     """
@@ -33,7 +34,7 @@ class SimpleMin2Net:
                 verbose=1,
                 log_path='models',
                 model_name='SimpleMin2Net',
-                random_seed=42,
+                random_seed=None,  # Use None to rely on global seed
                 **kwargs):
         
         D, T, C = input_shape
@@ -49,7 +50,7 @@ class SimpleMin2Net:
         self.verbose = verbose
         self.log_path = log_path
         self.model_name = model_name
-        self.random_seed = random_seed
+        self.random_seed = random_seed if random_seed is not None else config.RANDOM_SEED
         
         # Path for saving model weights and logs
         if not os.path.exists(self.log_path):
@@ -59,9 +60,9 @@ class SimpleMin2Net:
         self.csv_dir = os.path.join(log_path, f'{model_name}_log.log')
         self.time_log = os.path.join(log_path, f'{model_name}_time_log.csv')
         
-        # Set random seed for reproducibility
-        np.random.seed(self.random_seed)
-        tf.random.set_seed(self.random_seed)
+        # Ensure reproducibility (global seed should already be set by config import)
+        if self.verbose > 0:
+            print(f"Using random seed: {self.random_seed}")
         
         # Default parameters
         self.data_format = 'channels_last'
@@ -319,4 +320,4 @@ class SimpleMin2Net:
         latent_repr = encoder.predict(X_data)
         translated_data = decoder.predict(latent_repr)
         
-        return translated_data 
+        return translated_data

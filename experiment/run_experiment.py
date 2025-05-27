@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import argparse
 import time
 
-# Import config and utils
+# Import config first to ensure global seed is set
 import config
 from utils import (
     preprocess_and_partition_data,
@@ -48,7 +48,7 @@ def run_experiment(preprocess=False, translate=True, evaluate=True):
         translated_data = translate_source_subjects(translator)
         
         # Visualize the latent space to understand translation quality
-        visualize_latent_space(translator, ref_subject_id=config.REF_SUBJECT)
+        # visualize_latent_space(translator, ref_subject_id=config.REF_SUBJECT)
         
         # Extract features from translated data
         translated_features = extract_features_from_translated_data(translated_data)
@@ -120,4 +120,4 @@ if __name__ == "__main__":
         preprocess=args.preprocess,
         translate=args.translate,
         evaluate=args.evaluate
-    ) 
+    )

@@ -1,0 +1,56 @@
+{
+  "metadata": {
+    "timestamp": "20250526_184039",
+    "config": {
+      "BATCH_SIZE": 64,
+      "CROSS_VAL_FOLDS": 5,
+      "DATA_DIR": "/home/loaspra/Code/tesis-emilio/EEG-data-partition/data",
+      "EEG_CHANNELS": [
+        "Fz",
+        "Cz",
+        "Pz",
+        "Oz",
+        "P3",
+        "P4",
+        "PO7",
+        "PO8"
+      ],
+      "EPOCHS": 100,
+      "FEATURE_EXTRACTION_METHODS": [
+        "statistical",
+        "temporal",
+        "hjorth",
+        "zcr",
+        "line_length"
+      ],
+      "FILTER_RANGE": [
+        0.1,
+        30
+      ],
+      "LATENT_DIM": 64,
+      "LEARNING_RATE": 0.001,
+      "MIN2NET_BATCH_SIZE": 64,
+      "MIN2NET_ENCODER_UNITS": 64,
+      "MIN2NET_EPOCHS": 100,
+      "MIN2NET_INPUT_SHAPE": [
+        1,
+        204,
+        8
+      ],
+      "MIN2NET_LEARNING_RATE": 0.001,
+      "MIN2NET_PATIENCE": 10,
+      "MLP_BATCH_SIZE": 32,
+      "MLP_DROPOUT": 0.5,
+      "MLP_EPOCHS": 100,
+      "MLP_HIDDEN_UNITS": 64,
+      "MLP_LEARNING_RATE": 0.0005,
+      "MODEL_DIR": "/home/loaspra/Code/tesis-emilio/EEG-data-partition/experiment/models",
+      "NUM_CHANNELS": 8,
+      "NUM_SUBJECTS": 8,
+      "PARTITIONED_DATA_DIR": "/home/loaspra/Code/tesis-emilio/EEG-data-partition/data/partitioned",
+      "PROCESSED_DATA_DIR": "/home/loaspra/Code/tesis-emilio/EEG-data-partition/data/processed",
+      "RANDOM_SEED": 42,
+      "RAW_DATA_DIR": "/home/loaspra/Code/tesis-emilio/EEG-data-partition/data/raw",
+      "REF_SUBJECT": 1,
+      "RESULTS_DIR": "/home/loaspra/Code/tesis-emilio/EEG-data-partition/experiment/results",
+      "ROOT_DIR": 

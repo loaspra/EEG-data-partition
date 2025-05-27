@@ -59,4 +59,47 @@ FEATURE_EXTRACTION_METHODS = [
 
 # Evaluation parameters
 CROSS_VAL_FOLDS = 5
-RANDOM_SEED = 42 
+RANDOM_SEED = 42
+
+# Reproducibility setup
+def set_global_seed(seed=None):
+    """
+    Set global random seed for reproducibility across all libraries.
+    
+    Args:
+        seed (int): Random seed to use. If None, uses RANDOM_SEED from config.
+    """
+    if seed is None:
+        seed = RANDOM_SEED
+    
+    import numpy as np
+    import random
+    import os
+    
+    # Set seeds for basic random number generators
+    random.seed(seed)
+    np.random.seed(seed)
+    
+    # Set additional environment variables for deterministic behavior
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    os.environ['TF_DETERMINISTIC_OPS'] = '1'
+    os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
+    
+    # Try to import and configure TensorFlow if available
+    try:
+        import tensorflow as tf
+        tf.random.set_seed(seed)
+        
+        # Configure TensorFlow for reproducibility if available
+        try:
+            tf.config.experimental.enable_op_determinism()
+        except AttributeError:
+            # Older TensorFlow versions may not have this function
+            pass
+        
+        print(f"Global random seed set to: {seed} (TensorFlow configured)")
+    except ImportError:
+        print(f"Global random seed set to: {seed} (TensorFlow not available)")
+
+# Call the function to set seeds immediately when config is imported
+set_global_seed()
