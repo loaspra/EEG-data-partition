@@ -268,11 +268,11 @@ def balance_classes(eeg_data, labels):
     for cls in unique_classes:
         indices[cls] = np.where(labels == cls)[0]
     
-    # Downsample majority classes
+    # Downsample majority classes with fixed random seed
     balanced_indices = []
     for cls in unique_classes:
         if len(indices[cls]) > min_count:
-            # Random downsample
+            # Random downsample with fixed seed for reproducibility
             downsampled = resample(indices[cls], replace=False, n_samples=min_count, random_state=config.RANDOM_SEED)
             balanced_indices.extend(downsampled)
         else:
@@ -543,4 +543,4 @@ if __name__ == "__main__":
     preprocess_all_subjects()
     
     # Validation
-    validate_preprocessing() 
+    validate_preprocessing()

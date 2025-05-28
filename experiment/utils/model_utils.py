@@ -24,6 +24,9 @@ def train_min2net_translator():
     """
     print("=== Training SimpleMin2Net P300 Translator ===")
     
+    # Set random seed for reproducibility
+    np.random.seed(config.RANDOM_SEED)
+    
     # Load data for reference subject (Subject 1)
     ref_X_train, ref_y_train = load_subject_data(config.REF_SUBJECT, 'train')
     ref_X_val, ref_y_val = load_subject_data(config.REF_SUBJECT, 'val')
@@ -347,7 +350,7 @@ def train_and_evaluate_classifiers(translated_features=None, original_features=N
     # Check class balance in translated training data
     unique, counts = np.unique(trans_train_labels, return_counts=True)
     print(f"Translated training data class distribution: {dict(zip(unique, counts))}")
-    
+    print("FINAL INPUT OF CLASSIFIER SHAPE is: ", trans_train_features.shape[1])
     # PART 1: Train classifier on translated data
     print("\nTraining classifier on translated data...")
     translated_model = MLPClassifier(
@@ -463,4 +466,4 @@ def train_and_evaluate_classifiers(translated_features=None, original_features=N
     comparison_file = os.path.join(config.RESULTS_DIR, "classifier_comparison.png")
     print(f"\nComparison visualization saved to: {comparison_file}")
     
-    return trans_metrics, orig_metrics 
+    return trans_metrics, orig_metrics
