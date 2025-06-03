@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Real validation script that generates comprehensive barplots using actual MLP outputs.
-Compares optimized feature extraction (256D) vs baseline performance.
+Real validation script that generates comprehensive barplots comparing the main experiment:
+- MLP trained on translated data (S2-S8 translated to S1 space via Min2Net) 
+- MLP trained on original data (raw S2-S8 data)
+Both tested on Subject 1 held-out data.
 """
 
 import os
@@ -24,14 +26,16 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import config
 from utils.data_utils import load_subject_data, extract_features
 from mlp_classifier import MLPClassifier
+from simple_min2net import SimpleMin2Net
 
 # Set matplotlib backend for headless environments
 import matplotlib
 matplotlib.use('Agg')
 
-class RealValidationSuite:
+class TranslationValidationSuite:
     """
-    Real validation suite that tests actual MLP performance across subjects.
+    Real validation suite that tests the main experiment: 
+    Translated data MLP vs Original data MLP for P300 classification.
     """
     
     def __init__(self, num_subjects=8):
@@ -39,33 +43,147 @@ class RealValidationSuite:
         self.results = {
             'subject_results': [],
             'timing_info': {},
-            'feature_info': {}
+            'translation_info': {}
         }
+        self.translator = None
         
-    def run_subject_validation(self, subject_id, method_name="Optimized", epochs=30):
+    def train_translator(self):
         """
-        Run validation for a single subject.
+        Train Min2Net translator to map subjects 2-8 to Subject 1 space.
+        """
+        print(f"\n{'='*50}")
+        print("TRAINING MIN2NET TRANSLATOR")
+        print(f"{'='*50}")
+        
+        try:
+            # Load reference subject (Subject 1) data
+            ref_X_train, ref_y_train = load_subject_data(config.REF_SUBJECT, 'train')
+            ref_X_val, ref_y_val = load_subject_data(config.REF_SUBJECT, 'val')
+            
+            print(f"Reference subject data: Train={ref_X_train.shape}, Val={ref_X_val.shape}")
+            
+            # Prepare data for Min2Net (reshape from (trials, channels, samples) to (trials, 1, samples, channels))
+            from utils.data_utils import prepare_eeg_for_min2net
+            ref_X_train = prepare_eeg_for_min2net(ref_X_train)
+            ref_X_val = prepare_eeg_for_min2net(ref_X_val)
+            
+            print(f"Reshaped reference data: Train={ref_X_train.shape}, Val={ref_X_val.shape}")
+            
+            # Load source subjects (2-8) data
+            source_X_list, source_y_list = [], []
+            for subject_id in range(2, self.num_subjects + 1):
+                try:
+                    X_train, y_train = load_subject_data(subject_id, 'train')
+                    X_val, y_val = load_subject_data(subject_id, 'val')
+                    
+                    # Combine train and val for more training data
+                    X_combined = np.vstack([X_train, X_val])
+                    y_combined = np.concatenate([y_train, y_val])
+                    
+                    # Prepare data for Min2Net
+                    X_combined = prepare_eeg_for_min2net(X_combined)
+                    
+                    source_X_list.append(X_combined)
+                    source_y_list.append(y_combined)
+                    print(f"  Subject {subject_id}: {X_combined.shape}")
+                except Exception as e:
+                    print(f"  Warning: Could not load Subject {subject_id}: {e}")
+                    continue
+            
+            if not source_X_list:
+                raise Exception("No source subjects loaded successfully")
+            
+            # Combine all source data
+            source_X = np.vstack(source_X_list)
+            source_y = np.concatenate(source_y_list)
+            
+            # Combine reference data
+            ref_X = np.vstack([ref_X_train, ref_X_val])
+            ref_y = np.concatenate([ref_y_train, ref_y_val])
+            
+            print(f"Combined source data: {source_X.shape}")
+            print(f"Combined reference data: {ref_X.shape}")
+            
+            # Initialize and train translator
+            print(f"Input shape for SimpleMin2Net: {source_X.shape[1:]}")
+            self.translator = SimpleMin2Net(
+                input_shape=source_X.shape[1:],
+                latent_dim=config.LATENT_DIM,
+                batch_size=config.BATCH_SIZE,
+                epochs=50,  # Reduced for faster validation
+                verbose=1
+            )
+            
+            start_time = time.time()
+            
+            # Train translator
+            history = self.translator.fit(
+                source_data=(source_X, source_y),
+                target_data=(ref_X, ref_y)
+            )
+            
+            training_time = time.time() - start_time
+            print(f"✅ Translator trained in {training_time:.2f} seconds")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error training translator: {e}")
+            return False
+    
+    def run_subject_validation(self, subject_id, method_name="Translated", use_translation=True, epochs=30):
+        """
+        Run validation for a single subject using either translated or original data.
         
         Args:
-            subject_id (int): Subject ID to validate
+            subject_id (int): Subject ID to validate  
             method_name (str): Name of the method being tested
+            use_translation (bool): Whether to use translated data
             epochs (int): Number of training epochs
             
         Returns:
             dict: Validation results for the subject
         """
-        print(f"\n{'='*50}")
+        print(f"\n{'='*40}")
         print(f"VALIDATING SUBJECT {subject_id} - {method_name}")
-        print(f"{'='*50}")
+        print(f"{'='*40}")
         
         try:
             # Load subject data
             X_train, y_train = load_subject_data(subject_id, 'train')
-            print(f"Loaded training data: {X_train.shape}")
+            X_val, y_val = load_subject_data(subject_id, 'val')
+            
+            # Combine train and val for more training data
+            X_combined = np.vstack([X_train, X_val])
+            y_combined = np.concatenate([y_train, y_val])
+            
+            print(f"Loaded data: {X_combined.shape}")
+            
+            # Apply translation if requested
+            if use_translation and self.translator is not None:
+                print("  Applying Min2Net translation...")
+                start_time = time.time()
+                
+                # Prepare data for Min2Net
+                from utils.data_utils import prepare_eeg_for_min2net
+                X_reshaped = prepare_eeg_for_min2net(X_combined)
+                X_translated = self.translator.translate(X_reshaped)
+                
+                # Convert back from (trials, 1, samples, channels) to (trials, channels, samples)
+                X_translated_reshaped = np.zeros((X_translated.shape[0], X_translated.shape[3], X_translated.shape[2]))
+                for i in range(X_translated.shape[0]):
+                    X_translated_reshaped[i] = X_translated[i, 0].T
+                
+                translation_time = time.time() - start_time
+                print(f"  Translation completed in {translation_time:.2f}s")
+                X_features_input = X_translated_reshaped
+            else:
+                X_features_input = X_combined
+                translation_time = 0.0
             
             # Extract features
             start_time = time.time()
-            features = extract_features(X_train)
+            features = extract_features(X_features_input)
             extraction_time = time.time() - start_time
             
             print(f"Features extracted: {features.shape} in {extraction_time:.2f}s")
@@ -86,18 +204,18 @@ class RealValidationSuite:
             
             fold_times = []
             
-            for fold, (train_idx, val_idx) in enumerate(cv.split(features_scaled, y_train)):
+            for fold, (train_idx, val_idx) in enumerate(cv.split(features_scaled, y_combined)):
                 print(f"  Fold {fold + 1}/5...")
                 
                 X_fold_train, X_fold_val = features_scaled[train_idx], features_scaled[val_idx]
-                y_fold_train, y_fold_val = y_train[train_idx], y_train[val_idx]
+                y_fold_train, y_fold_val = y_combined[train_idx], y_combined[val_idx]
                 
                 # Create and train model
                 fold_start = time.time()
                 mlp = MLPClassifier(
                     input_shape=features.shape[1],
-                    hidden_units=64,
-                    dropout=0.5
+                    hidden_units=[128, 64],  # Use enhanced architecture for fair comparison
+                    dropout=0.4
                 )
                 
                 # Train with reduced output
@@ -127,9 +245,11 @@ class RealValidationSuite:
                 'precision_mean': mean_scores['precision'],
                 'recall_mean': mean_scores['recall'],
                 'extraction_time': extraction_time,
+                'translation_time': translation_time,
                 'training_time': np.mean(fold_times),
                 'feature_dim': features.shape[1],
-                'n_trials': features.shape[0]
+                'n_trials': features.shape[0],
+                'use_translation': use_translation
             }
             
             print(f"  Results: F1={mean_scores['f1']:.3f}±{std_scores['f1']:.3f}, "
@@ -146,116 +266,107 @@ class RealValidationSuite:
                 'f1_mean': 0.0,
                 'f1_std': 0.0,
                 'accuracy_mean': 0.0,
-                'accuracy_std': 0.0
+                'accuracy_std': 0.0,
+                'use_translation': use_translation
             }
-    
-    def create_baseline_comparison(self, optimized_results):
-        """
-        Create baseline comparison by simulating slightly worse performance.
-        In practice, this would come from running without optimization.
-        """
-        baseline_results = []
-        
-        for opt_result in optimized_results:
-            if 'error' not in opt_result:
-                # Simulate baseline performance (typically 5-15% worse)
-                degradation = np.random.uniform(0.05, 0.15)
-                noise = np.random.normal(0, 0.02)  # Add some realistic noise
-                
-                baseline_f1 = opt_result['f1_mean'] * (1 - degradation) + noise
-                baseline_f1 = max(0.0, min(1.0, baseline_f1))  # Clamp to valid range
-                
-                baseline_acc = opt_result['accuracy_mean'] * (1 - degradation * 0.8) + noise
-                baseline_acc = max(0.0, min(1.0, baseline_acc))
-                
-                baseline_result = {
-                    'subject_id': opt_result['subject_id'],
-                    'method': 'Baseline (288D)',
-                    'f1_mean': baseline_f1,
-                    'f1_std': opt_result['f1_std'] * 1.1,  # Slightly higher variance
-                    'accuracy_mean': baseline_acc,
-                    'accuracy_std': opt_result['accuracy_std'] * 1.1,
-                    'precision_mean': opt_result['precision_mean'] * (1 - degradation * 0.7),
-                    'recall_mean': opt_result['recall_mean'] * (1 - degradation * 0.9),
-                    'feature_dim': 288,  # Original dimension
-                    'n_trials': opt_result['n_trials']
-                }
-                baseline_results.append(baseline_result)
-        
-        return baseline_results
     
     def run_comprehensive_validation(self):
         """
-        Run comprehensive validation across all subjects.
+        Run comprehensive validation comparing translated vs original data.
         """
         print("="*80)
-        print("COMPREHENSIVE REAL MLP VALIDATION SUITE")
+        print("COMPREHENSIVE TRANSLATION EXPERIMENT VALIDATION")
+        print("Comparing: MLP on Translated Data vs MLP on Original Data")
         print("="*80)
         
-        # Run optimized validation for available subjects
-        optimized_results = []
+        # First train the translator
+        if not self.train_translator():
+            print("❌ Failed to train translator - cannot proceed")
+            return None
         
-        for subject_id in range(1, self.num_subjects + 1):
+        # Run validation for subjects 2-8 (source subjects)
+        translated_results = []
+        original_results = []
+        
+        for subject_id in range(2, self.num_subjects + 1):
             try:
-                result = self.run_subject_validation(subject_id, "Optimized (256D)", epochs=25)
-                if 'error' not in result:
-                    optimized_results.append(result)
+                # Test with translated data
+                trans_result = self.run_subject_validation(
+                    subject_id, "Translated Data", use_translation=True, epochs=25
+                )
+                if 'error' not in trans_result:
+                    translated_results.append(trans_result)
+                
+                # Test with original data
+                orig_result = self.run_subject_validation(
+                    subject_id, "Original Data", use_translation=False, epochs=25
+                )
+                if 'error' not in orig_result:
+                    original_results.append(orig_result)
+                    
             except Exception as e:
                 print(f"Skipping subject {subject_id}: {e}")
                 continue
         
-        if not optimized_results:
+        if not translated_results or not original_results:
             print("❌ No successful validations - cannot generate comparison")
             return None
         
-        print(f"\n✅ Successfully validated {len(optimized_results)} subjects")
-        
-        # Create baseline comparison
-        baseline_results = self.create_baseline_comparison(optimized_results)
+        print(f"\n✅ Successfully validated {len(translated_results)} subjects with translation")
+        print(f"✅ Successfully validated {len(original_results)} subjects with original data")
         
         # Store results
         self.results = {
-            'optimized_results': optimized_results,
-            'baseline_results': baseline_results,
-            'comparison_data': self._prepare_comparison_data(baseline_results, optimized_results)
+            'translated_results': translated_results,
+            'original_results': original_results,
+            'comparison_data': self._prepare_comparison_data(original_results, translated_results)
         }
         
         return self.results
     
-    def _prepare_comparison_data(self, baseline_results, optimized_results):
+    def _prepare_comparison_data(self, original_results, translated_results):
         """
         Prepare data for comparison plots.
         """
         comparison_data = []
         
-        for baseline, optimized in zip(baseline_results, optimized_results):
+        # Match subjects between original and translated results
+        orig_dict = {r['subject_id']: r for r in original_results}
+        trans_dict = {r['subject_id']: r for r in translated_results}
+        
+        common_subjects = set(orig_dict.keys()) & set(trans_dict.keys())
+        
+        for subject_id in common_subjects:
+            original = orig_dict[subject_id]
+            translated = trans_dict[subject_id]
+            
             comparison_data.append({
-                'test_subject': baseline['subject_id'],
-                'baseline_f1': baseline['f1_mean'],
-                'optimized_f1': optimized['f1_mean'],
-                'improvement': optimized['f1_mean'] - baseline['f1_mean'],
-                'baseline_accuracy': baseline['accuracy_mean'],
-                'optimized_accuracy': optimized['accuracy_mean']
+                'test_subject': subject_id,
+                'original_f1': original['f1_mean'],
+                'translated_f1': translated['f1_mean'],
+                'improvement': translated['f1_mean'] - original['f1_mean'],
+                'original_accuracy': original['accuracy_mean'],
+                'translated_accuracy': translated['accuracy_mean']
             })
         
         return comparison_data
     
     def create_comprehensive_barplot(self, save_dir):
         """
-        Create comprehensive barplot similar to the mock version but with real data.
+        Create comprehensive barplot comparing translated vs original data MLPs.
         """
         if not self.results or 'comparison_data' not in self.results:
             print("❌ No results available for plotting")
             return
         
         comparison_data = self.results['comparison_data']
-        baseline_results = self.results['baseline_results'] 
-        optimized_results = self.results['optimized_results']
+        original_results = self.results['original_results'] 
+        translated_results = self.results['translated_results']
         
         # Extract data for plotting
         subjects = [d['test_subject'] for d in comparison_data]
-        baseline_f1 = [d['baseline_f1'] for d in comparison_data]
-        optimized_f1 = [d['optimized_f1'] for d in comparison_data]
+        original_f1 = [d['original_f1'] for d in comparison_data]
+        translated_f1 = [d['translated_f1'] for d in comparison_data]
         improvements = [d['improvement'] for d in comparison_data]
         
         # Create comprehensive plot
@@ -266,14 +377,14 @@ class RealValidationSuite:
         x_pos = np.arange(len(subjects))
         width = 0.35
         
-        bars1 = axes[0, 0].bar(x_pos - width/2, baseline_f1, width, 
-                              label='Baseline (288D)', alpha=0.8, color='#ff7f7f')
-        bars2 = axes[0, 0].bar(x_pos + width/2, optimized_f1, width,
-                              label='Optimized (256D)', alpha=0.8, color='#7f7fff')
+        bars1 = axes[0, 0].bar(x_pos - width/2, original_f1, width, 
+                              label='Original Data MLP', alpha=0.8, color='#ff7f7f')
+        bars2 = axes[0, 0].bar(x_pos + width/2, translated_f1, width,
+                              label='Translated Data MLP', alpha=0.8, color='#7f7fff')
         
         axes[0, 0].set_xlabel('Subject ID')
         axes[0, 0].set_ylabel('F1 Score')
-        axes[0, 0].set_title('F1 Score by Subject (Real Data)')
+        axes[0, 0].set_title('F1 Score by Subject (Translation Experiment)')
         axes[0, 0].set_xticks(x_pos)
         axes[0, 0].set_xticklabels(subjects)
         axes[0, 0].legend()
@@ -296,14 +407,14 @@ class RealValidationSuite:
                           label='No improvement', linewidth=2)
         axes[0, 1].set_xlabel('F1 Score Improvement')
         axes[0, 1].set_ylabel('Number of Subjects')
-        axes[0, 1].set_title('Distribution of Improvements')
+        axes[0, 1].set_title('Distribution of Translation Improvements')
         axes[0, 1].legend()
         axes[0, 1].grid(axis='y', alpha=0.3)
         
         # 3. Methods comparison (main barplot)
-        methods = ['Baseline\n(288D)', 'Optimized\n(256D)']
-        means = [np.mean(baseline_f1), np.mean(optimized_f1)]
-        stds = [np.std(baseline_f1), np.std(optimized_f1)]
+        methods = ['Original Data\nMLP', 'Translated Data\nMLP']
+        means = [np.mean(original_f1), np.mean(translated_f1)]
+        stds = [np.std(original_f1), np.std(translated_f1)]
         
         x_pos_methods = np.arange(len(methods))
         bars = axes[0, 2].bar(x_pos_methods, means, yerr=stds, capsize=10,
@@ -312,7 +423,7 @@ class RealValidationSuite:
         
         axes[0, 2].set_xlabel('Method')
         axes[0, 2].set_ylabel('F1 Score')
-        axes[0, 2].set_title('Feature Optimization Comparison')
+        axes[0, 2].set_title('Translation Experiment Comparison')
         axes[0, 2].set_xticks(x_pos_methods)
         axes[0, 2].set_xticklabels(methods)
         axes[0, 2].grid(axis='y', alpha=0.3)
@@ -325,7 +436,7 @@ class RealValidationSuite:
                            fontweight='bold', fontsize=12)
         
         # Statistical testing
-        t_stat, p_value = stats.ttest_rel(optimized_f1, baseline_f1)
+        t_stat, p_value = stats.ttest_rel(translated_f1, original_f1)
         
         # Add significance indicator
         if p_value < 0.05:
@@ -347,7 +458,7 @@ class RealValidationSuite:
         axes[1, 0].axhline(y=0, color='black', linestyle='-', alpha=0.5)
         axes[1, 0].set_xlabel('Subject ID')
         axes[1, 0].set_ylabel('F1 Score Improvement')
-        axes[1, 0].set_title('Individual Subject Improvements')
+        axes[1, 0].set_title('Individual Subject Translation Benefits')
         axes[1, 0].grid(axis='y', alpha=0.3)
         
         # Add value labels
@@ -360,8 +471,8 @@ class RealValidationSuite:
                            fontweight='bold', fontsize=9)
         
         # 5. Box plots comparison
-        data_to_plot = [baseline_f1, optimized_f1]
-        box_plot = axes[1, 1].boxplot(data_to_plot, labels=['Baseline\n(288D)', 'Optimized\n(256D)'], 
+        data_to_plot = [original_f1, translated_f1]
+        box_plot = axes[1, 1].boxplot(data_to_plot, labels=['Original Data\nMLP', 'Translated Data\nMLP'], 
                                       patch_artist=True)
         box_plot['boxes'][0].set_facecolor('#ff7f7f')
         box_plot['boxes'][1].set_facecolor('#7f7fff')
@@ -372,10 +483,11 @@ class RealValidationSuite:
         # 6. Statistical summary
         cohens_d = np.mean(improvements) / np.std(improvements) if np.std(improvements) > 0 else 0
         
-        stats_text = f"Real MLP Validation Results\n"
-        stats_text += f"{'='*30}\n\n"
-        stats_text += f"Subjects validated: {len(subjects)}\n"
-        stats_text += f"Feature reduction: 288 → 256 dims\n\n"
+        stats_text = f"Translation Experiment Results\n"
+        stats_text += f"{'='*35}\n\n"
+        stats_text += f"Subjects tested: {len(subjects)}\n"
+        stats_text += f"Translation: S2-S8 → S1 space\n"
+        stats_text += f"Architecture: Min2Net + MLP\n\n"
         stats_text += f"Mean improvement: {np.mean(improvements):.4f}\n"
         stats_text += f"Std improvement: {np.std(improvements):.4f}\n"
         stats_text += f"Cohen's d: {cohens_d:.4f}\n"
@@ -383,33 +495,35 @@ class RealValidationSuite:
         stats_text += f"p-value: {p_value:.4f}\n\n"
         
         if p_value < 0.05:
-            stats_text += "✅ Significant improvement\n"
+            stats_text += "✅ Translation shows significant improvement\n"
         else:
-            stats_text += "❌ No significant improvement\n"
+            stats_text += "❌ No significant translation benefit\n"
             
         improved_subjects = sum(1 for i in improvements if i > 0)
         stats_text += f"\nSubjects improved: {improved_subjects}/{len(improvements)}\n"
-        stats_text += f"Avg extraction time: {np.mean([r['extraction_time'] for r in optimized_results]):.3f}s\n"
-        stats_text += f"Avg training time: {np.mean([r['training_time'] for r in optimized_results]):.1f}s"
+        
+        if translated_results:
+            avg_translation_time = np.mean([r['translation_time'] for r in translated_results])
+            stats_text += f"Avg translation time: {avg_translation_time:.3f}s\n"
         
         axes[1, 2].text(0.05, 0.95, stats_text, fontsize=10, verticalalignment='top',
-                       bbox=dict(boxstyle="round,pad=0.5", facecolor="lightblue", alpha=0.8),
+                       bbox=dict(boxstyle="round,pad=0.5", facecolor="lightgreen", alpha=0.8),
                        transform=axes[1, 2].transAxes)
         axes[1, 2].set_xlim(0, 1)
         axes[1, 2].set_ylim(0, 1)
-        axes[1, 2].set_title('Real Validation Summary')
+        axes[1, 2].set_title('Translation Experiment Summary')
         axes[1, 2].axis('off')
         
         plt.tight_layout()
         
         # Save plots
-        save_path = os.path.join(save_dir, 'real_comprehensive_validation_results.png')
+        save_path = os.path.join(save_dir, 'translation_experiment_results.png')
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         
-        save_path_pdf = os.path.join(save_dir, 'real_comprehensive_validation_results.pdf')
+        save_path_pdf = os.path.join(save_dir, 'translation_experiment_results.pdf')
         plt.savefig(save_path_pdf, bbox_inches='tight')
         
-        print(f"\n📊 Real validation plots saved to:")
+        print(f"\n📊 Translation experiment plots saved to:")
         print(f"   PNG: {save_path}")
         print(f"   PDF: {save_path_pdf}")
         
@@ -425,14 +539,14 @@ class RealValidationSuite:
             return
         
         # Save detailed results
-        all_results = self.results['baseline_results'] + self.results['optimized_results']
+        all_results = self.results['original_results'] + self.results['translated_results']
         results_df = pd.DataFrame(all_results)
-        csv_path = os.path.join(save_dir, 'real_validation_detailed_results.csv')
+        csv_path = os.path.join(save_dir, 'translation_experiment_detailed_results.csv')
         results_df.to_csv(csv_path, index=False)
         
         # Save comparison summary
         comparison_df = pd.DataFrame(self.results['comparison_data'])
-        comparison_path = os.path.join(save_dir, 'real_validation_comparison.csv')
+        comparison_path = os.path.join(save_dir, 'translation_experiment_comparison.csv')
         comparison_df.to_csv(comparison_path, index=False)
         
         print(f"\n📄 Results saved to:")
@@ -442,16 +556,17 @@ class RealValidationSuite:
 
 def main():
     """
-    Main function to run real validation and generate comprehensive barplots.
+    Main function to run translation experiment validation and generate comprehensive barplots.
     """
-    print("Starting real MLP validation with comprehensive barplots...")
+    print("Starting Translation Experiment Validation...")
+    print("Comparing: MLP trained on Translated Data vs MLP trained on Original Data")
     
     # Setup results directory
-    results_dir = os.path.join(config.RESULTS_DIR, "real_validation")
+    results_dir = os.path.join(config.RESULTS_DIR, "translation_experiment")
     os.makedirs(results_dir, exist_ok=True)
     
     # Create validator
-    validator = RealValidationSuite(num_subjects=min(8, config.NUM_SUBJECTS))
+    validator = TranslationValidationSuite(num_subjects=min(8, config.NUM_SUBJECTS))
     
     # Run validation
     results = validator.run_comprehensive_validation()
@@ -463,11 +578,11 @@ def main():
         # Save results
         validator.save_results(results_dir)
         
-        print(f"\n✅ Real validation completed successfully!")
+        print(f"\n✅ Translation experiment validation completed successfully!")
         print(f"📁 All results saved to: {results_dir}")
         
     else:
-        print("❌ Validation failed - no results to plot")
+        print("❌ Translation experiment validation failed - no results to plot")
     
     return results
 
