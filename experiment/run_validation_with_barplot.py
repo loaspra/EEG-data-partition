@@ -259,9 +259,11 @@ def create_comprehensive_plots(subject_results, results_dir):
     axes[1, 2].set_title('Statistical Summary')
     axes[1, 2].axis('off')
     
+    print("saving comprehensive validation results")
     plt.tight_layout()
     plt.savefig(os.path.join(results_dir, 'comprehensive_validation_results.png'), 
                dpi=300, bbox_inches='tight')
+    print("comprehensive validation results saved")
     plt.close()
 
 def main():
