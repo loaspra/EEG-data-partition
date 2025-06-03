@@ -112,14 +112,11 @@ def extract_p300_time_window_features(eeg_data, sampling_rate=256):
             # Basic features from the entire signal
             signal = eeg_data[trial, ch, :]
             
-            # Global features
+            # Global features (only unique ones - removing duplicates with standard features)
+            # Removed: mean, std, skewness, kurtosis (already in standard statistical features)
             trial_features.extend([
-                np.mean(signal),
-                np.std(signal),
-                np.max(signal),
-                np.min(signal),
-                skew(signal),
-                kurtosis(signal)
+                np.max(signal),   # Maximum - unique feature
+                np.min(signal)    # Minimum - unique feature
             ])
             
             # Window-based features

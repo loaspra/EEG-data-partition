@@ -256,6 +256,10 @@ class ValidationSuite:
                 significance = "Not significant"
             print(f"Result: {significance}")
         
+        # Create the dedicated translation methods barplot
+        print("\nCreating translation methods comparison barplot...")
+        self.create_translation_methods_barplot()
+        
         # Save detailed results
         self._save_validation_results()
         
@@ -383,7 +387,7 @@ class ValidationSuite:
             
         subject_results = self.results['cross_validation']['subject_results']
         
-        fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+        fig, axes = plt.subplots(2, 3, figsize=(20, 12))
         
         # Subject-wise comparison
         subjects = [r['test_subject'] for r in subject_results]
@@ -406,15 +410,35 @@ class ValidationSuite:
         axes[0, 1].set_title('Distribution of Improvements')
         axes[0, 1].legend()
         
+        # Translation methods comparison (new barplot)
+        methods = ['No Translation', 'With Translation']
+        means = [np.mean(original), np.mean(translated)]
+        stds = [np.std(original), np.std(translated)]
+        
+        x_pos = np.arange(len(methods))
+        bars = axes[0, 2].bar(x_pos, means, yerr=stds, capsize=8, 
+                             color=['#ff7f7f', '#7f7fff'], alpha=0.8)
+        axes[0, 2].set_xlabel('Method')
+        axes[0, 2].set_ylabel('F1 Score')
+        axes[0, 2].set_title('Translation Methods Comparison')
+        axes[0, 2].set_xticks(x_pos)
+        axes[0, 2].set_xticklabels(methods)
+        
+        # Add value labels on bars
+        for bar, mean, std in zip(bars, means, stds):
+            height = bar.get_height()
+            axes[0, 2].text(bar.get_x() + bar.get_width()/2., height + std/2,
+                           f'{mean:.3f}', ha='center', va='bottom', fontweight='bold')
+        
         # Baseline comparison
         if 'baseline_comparisons' in self.results:
             baselines = self.results['baseline_comparisons']
             names = [b['name'] for b in baselines]
-            means = [b['mean_f1'] for b in baselines]
-            stds = [b['std_f1'] for b in baselines]
+            means_base = [b['mean_f1'] for b in baselines]
+            stds_base = [b['std_f1'] for b in baselines]
             
             y_pos = np.arange(len(names))
-            axes[1, 0].barh(y_pos, means, xerr=stds, alpha=0.7)
+            axes[1, 0].barh(y_pos, means_base, xerr=stds_base, alpha=0.7)
             axes[1, 0].set_yticks(y_pos)
             axes[1, 0].set_yticklabels(names)
             axes[1, 0].set_xlabel('F1 Score')
@@ -434,9 +458,115 @@ class ValidationSuite:
             axes[1, 1].set_title('Statistical Summary')
             axes[1, 1].axis('off')
         
+        # Subject improvement plot
+        improvement_colors = ['green' if imp > 0 else 'red' for imp in improvements]
+        axes[1, 2].bar(subjects, improvements, color=improvement_colors, alpha=0.7)
+        axes[1, 2].axhline(y=0, color='black', linestyle='-', alpha=0.5)
+        axes[1, 2].set_xlabel('Subject')
+        axes[1, 2].set_ylabel('F1 Score Improvement')
+        axes[1, 2].set_title('Individual Subject Improvements')
+        axes[1, 2].grid(axis='y', alpha=0.3)
+        
         plt.tight_layout()
         plt.savefig(os.path.join(config.RESULTS_DIR, 'validation_summary.png'), dpi=300, bbox_inches='tight')
         plt.close()
+
+    def create_translation_methods_barplot(self):
+        """
+        Create a dedicated barplot comparing the two translation methods.
+        """
+        if not self.results['cross_validation']:
+            print("No cross-validation results available for barplot.")
+            return
+            
+        subject_results = self.results['cross_validation']['subject_results']
+        
+        # Extract data
+        original_scores = [r['original_f1'] for r in subject_results]
+        translated_scores = [r['translated_f1'] for r in subject_results]
+        
+        # Calculate statistics
+        methods = ['No Translation\n(Cross-Subject)', 'With Translation\n(Cross-Subject)']
+        means = [np.mean(original_scores), np.mean(translated_scores)]
+        stds = [np.std(original_scores), np.std(translated_scores)]
+        
+        # Create the barplot
+        fig, ax = plt.subplots(figsize=(10, 8))
+        
+        # Create bars
+        x_pos = np.arange(len(methods))
+        bars = ax.bar(x_pos, means, yerr=stds, capsize=10, 
+                     color=['#ff7f7f', '#7f7fff'], alpha=0.8, 
+                     edgecolor='black', linewidth=1.5)
+        
+        # Customize the plot
+        ax.set_xlabel('Translation Method', fontsize=14, fontweight='bold')
+        ax.set_ylabel('F1 Score', fontsize=14, fontweight='bold')
+        ax.set_title('Comparison of Translation Methods\n(Leave-One-Subject-Out Cross-Validation)', 
+                    fontsize=16, fontweight='bold', pad=20)
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(methods, fontsize=12)
+        
+        # Add value labels on bars
+        for i, (bar, mean, std) in enumerate(zip(bars, means, stds)):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + std/2,
+                   f'{mean:.3f}±{std:.3f}', ha='center', va='bottom', 
+                   fontweight='bold', fontsize=12)
+        
+        # Add statistical significance indicator if available
+        if 'statistical_tests' in self.results and self.results['statistical_tests']:
+            p_value = self.results['statistical_tests']['paired_t_test']['p_value']
+            if p_value < 0.05:
+                # Add significance stars
+                max_height = max(means) + max(stds)
+                ax.plot([0, 1], [max_height + 0.02, max_height + 0.02], 'k-', linewidth=2)
+                ax.plot([0, 0], [max_height + 0.015, max_height + 0.02], 'k-', linewidth=2)
+                ax.plot([1, 1], [max_height + 0.015, max_height + 0.02], 'k-', linewidth=2)
+                
+                # Add significance level
+                if p_value < 0.001:
+                    sig_text = '***'
+                elif p_value < 0.01:
+                    sig_text = '**'
+                else:
+                    sig_text = '*'
+                    
+                ax.text(0.5, max_height + 0.025, sig_text, ha='center', va='bottom', 
+                       fontsize=16, fontweight='bold')
+                ax.text(0.5, max_height + 0.035, f'p = {p_value:.4f}', ha='center', va='bottom', 
+                       fontsize=10)
+        
+        # Add grid for better readability
+        ax.grid(axis='y', alpha=0.3, linestyle='--')
+        ax.set_axisbelow(True)
+        
+        # Set y-axis limits
+        y_min = min(means) - max(stds) - 0.05
+        y_max = max(means) + max(stds) + 0.1
+        ax.set_ylim(y_min, y_max)
+        
+        # Improve layout
+        plt.tight_layout()
+        
+        # Save the plot
+        results_dir = config.RESULTS_DIR
+        plt.savefig(os.path.join(results_dir, 'translation_methods_comparison.png'), 
+                   dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(results_dir, 'translation_methods_comparison.pdf'), 
+                   bbox_inches='tight')
+        
+        print(f"Translation methods barplot saved to {results_dir}")
+        plt.show()
+        
+        # Print numerical summary
+        improvement = means[1] - means[0]
+        print(f"\nTranslation Methods Comparison Summary:")
+        print(f"No Translation: {means[0]:.4f} ± {stds[0]:.4f}")
+        print(f"With Translation: {means[1]:.4f} ± {stds[1]:.4f}")
+        print(f"Improvement: {improvement:.4f} ({improvement/means[0]*100:.1f}%)")
+        
+        return fig, ax
 
 
 def run_comprehensive_validation():
